@@ -1,13 +1,15 @@
 """Reliable DatabaseEngine wrapper around mysql-connector.
 
 Features:
-- Centralized connection management and validation
+- Shared MySQL connection pooling for multi-user Streamlit sessions
 - Safe cursor context manager with transient-connection fallback
 - `query()` for SELECTs and `execute()` for DML with commit/rollback
 - Uses Streamlit `st.error`/`st.info` if available, otherwise prints
 """
 from contextlib import contextmanager
-from typing import Any, Generator, Optional, Tuple
+import hashlib
+from threading import Lock
+from typing import Any, Dict, Generator, Optional, Tuple
 
 try:
     import streamlit as st
@@ -15,6 +17,7 @@ except Exception:
     st = None
 
 import mysql.connector
+from mysql.connector import pooling
 
 
 def _log_error(msg: str) -> None:
@@ -40,51 +43,82 @@ def _log_info(msg: str) -> None:
 class DatabaseEngine:
     """Small helper around mysql.connector connections.
 
-    Usage:
-        db = DatabaseEngine(host, user, password, database)
-        rows = db.query("SELECT ...", params)
-        n = db.execute("INSERT ...", params)
-        db.close()
+    Uses a shared pool across sessions for the same DB config, so each query
+    borrows a connection and returns it immediately.
     """
 
-    def __init__(self, host: str, user: str, password: str, database: str) -> None:
+    _pools: Dict[str, Any] = {}
+    _pool_lock: Lock = Lock()
+
+    def __init__(
+        self,
+        host: str,
+        user: str,
+        password: str,
+        database: str,
+        port: int = 3306,
+        pool_size: int = 10,
+    ) -> None:
         self.host = host
         self.user = user
         self.password = password
         self.database = database
+        self.port = int(port)
+        self.pool_size = max(int(pool_size), 1)
+        # Legacy field kept for backward compatibility with previous code paths.
         self.connection: Optional[Any] = None
 
-    def connect(self) -> None:
-        """Create a persistent connection and validate it."""
-        try:
-            if self.connection is not None:
-                is_connected = getattr(self.connection, "is_connected", None)
-                if callable(is_connected) and is_connected():
-                    return
-                if hasattr(self.connection, "cursor"):
-                    return
-        except Exception:
-            # fall through to reconnect
-            self.connection = None
+    def _pool_key(self) -> str:
+        raw = f"{self.host}|{self.port}|{self.user}|{self.database}|{self.password}|{self.pool_size}"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
-        try:
-            self.connection = mysql.connector.connect(
+    def _pool_name(self) -> str:
+        return f"testops_{self._pool_key()[:16]}"
+
+    def _get_or_create_pool(self) -> Any:
+        key = self._pool_key()
+        existing = DatabaseEngine._pools.get(key)
+        if existing is not None:
+            return existing
+
+        with DatabaseEngine._pool_lock:
+            existing = DatabaseEngine._pools.get(key)
+            if existing is not None:
+                return existing
+
+            pool = pooling.MySQLConnectionPool(
+                pool_name=self._pool_name(),
+                pool_size=self.pool_size,
+                pool_reset_session=True,
                 host=self.host,
+                port=self.port,
                 user=self.user,
                 password=self.password,
                 database=self.database,
                 autocommit=False,
             )
+            DatabaseEngine._pools[key] = pool
+            return pool
+
+    def connect(self) -> None:
+        """Initialize/validate pool by borrowing one connection."""
+        try:
+            pool = self._get_or_create_pool()
+            conn = pool.get_connection()
+            try:
+                if not hasattr(conn, "cursor"):
+                    raise RuntimeError("Invalid pooled DB connection object")
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
-            _log_error(f"Database connection error: {e}")
+            _log_error(f"Database pool initialization error: {e}")
             raise
 
-        if not hasattr(self.connection, "cursor"):
-            _log_error("Established DB connection has no cursor() method")
-            raise RuntimeError("Invalid DB connection object")
-
     def close(self) -> None:
-        """Close persistent connection if present."""
+        """Close legacy persistent connection if present."""
         if self.connection is not None:
             try:
                 close = getattr(self.connection, "close", None)
@@ -96,66 +130,50 @@ class DatabaseEngine:
 
     @contextmanager
     def _cursor(self, dictionary: bool = False) -> Generator[Tuple[Any, bool], None, None]:
-        """Yield (cursor, used_transient_connection).
+        """Yield (cursor, used_transient_connection)."""
+        conn = None
+        cursor = None
+        used_transient = False
 
-        If `self.connection` is usable, yields a cursor from it and
-        `used_transient_connection` is False. Otherwise opens a transient
-        connection with the stored credentials and yields its cursor; in
-        that case the transient connection is closed on exit and the flag
-        is True.
-        """
-        # Try persistent connection first
         try:
-            if self.connection is None:
-                self.connect()
-            conn = self.connection
-            if conn is not None and callable(getattr(conn, "cursor", None)):
-                cursor = conn.cursor(dictionary=dictionary)
-                try:
-                    yield cursor, False
-                finally:
-                    try:
-                        cursor.close()
-                    except Exception:
-                        pass
-                return
-        except Exception:
-            # If persistent connection fails, fall back to transient
-            pass
-
-        # Transient connection fallback
-        transient = None
-        try:
-            transient = mysql.connector.connect(
-                host=self.host,
-                user=self.user,
-                password=self.password,
-                database=self.database,
-            )
-            cursor = transient.cursor(dictionary=dictionary)
+            pool = self._get_or_create_pool()
+            conn = pool.get_connection()
+        except Exception as pool_err:
+            # Fallback preserves service if pool init/borrow fails unexpectedly.
+            _log_info(f"Pool unavailable; using direct connection fallback: {pool_err}")
             try:
-                yield cursor, True
-            finally:
+                conn = mysql.connector.connect(
+                    host=self.host,
+                    port=self.port,
+                    user=self.user,
+                    password=self.password,
+                    database=self.database,
+                    autocommit=False,
+                )
+                used_transient = True
+            except Exception as e:
+                _log_error(f"Failed to obtain cursor (fallback connect): {e}")
+                raise
+
+        try:
+            cursor = conn.cursor(dictionary=dictionary)
+            yield cursor, used_transient
+        finally:
+            if cursor is not None:
                 try:
                     cursor.close()
                 except Exception:
                     pass
+            if conn is not None:
                 try:
-                    transient.close()
+                    # For pooled connections this returns the connection to pool.
+                    conn.close()
                 except Exception:
                     pass
-        except Exception as e:
-            if transient is not None:
-                try:
-                    transient.close()
-                except Exception:
-                    pass
-            _log_error(f"Failed to obtain cursor (transient fallback): {e}")
-            raise
 
     def query(self, sql: str, params: Optional[Tuple[Any, ...]] = None) -> list:
         """Execute SELECT and return rows as list[dict]."""
-        with self._cursor(dictionary=True) as (cursor, transient):
+        with self._cursor(dictionary=True) as (cursor, _):
             try:
                 if params is not None:
                     cursor.execute(sql, params)
@@ -168,17 +186,14 @@ class DatabaseEngine:
 
     def execute(self, sql: str, params: Optional[Tuple[Any, ...]] = None) -> int:
         """Execute DML, commit and return affected row count."""
-        with self._cursor(dictionary=False) as (cursor, transient):
+        with self._cursor(dictionary=False) as (cursor, _):
             try:
                 if params is not None:
                     cursor.execute(sql, params)
                 else:
                     cursor.execute(sql)
-                # Commit on the connection that produced the cursor
-                conn = self.connection if not transient else getattr(cursor, "connection", None)
-                if conn is None:
-                    # try to get connection attribute from cursor
-                    conn = getattr(cursor, "connection", None)
+
+                conn = getattr(cursor, "connection", None)
                 commit = getattr(conn, "commit", None)
                 if callable(commit):
                     commit()
@@ -186,9 +201,8 @@ class DatabaseEngine:
                     raise RuntimeError("Connection object has no commit() method")
                 return getattr(cursor, "rowcount", 0)
             except Exception as e:
-                # Try rollback if possible
                 try:
-                    conn = self.connection if not transient else getattr(cursor, "connection", None)
+                    conn = getattr(cursor, "connection", None)
                     rollback = getattr(conn, "rollback", None)
                     if callable(rollback):
                         rollback()

@@ -73,13 +73,14 @@ def _get_secret(section: str, key: str, default=None):
         ("mysql", "user"): ["MYSQL_USER"],
         ("mysql", "password"): ["MYSQL_PASS", "MYSQL_PASSWORD"],
         ("mysql", "database"): ["MYSQL_DB", "MYSQL_DATABASE"],
+        ("mysql", "pool_size"): ["MYSQL_POOL_SIZE"],
     }
 
     for env_key in env_aliases.get((section, key), [f"{section}_{key}".upper()]):
         val = os.getenv(env_key)
         if val is None or val == "":
             continue
-        if key == "port":
+        if key in {"port", "pool_size"}:
             try:
                 return int(val)
             except Exception:
@@ -89,7 +90,7 @@ def _get_secret(section: str, key: str, default=None):
     try:
         if section in st.secrets and key in st.secrets[section]:
             val = st.secrets[section][key]
-            if key == "port":
+            if key in {"port", "pool_size"}:
                 try:
                     return int(val)
                 except Exception:
@@ -109,6 +110,7 @@ MYSQL_PORT = _get_secret("mysql", "port", 3306)
 MYSQL_USER = _get_secret("mysql", "user", None)
 MYSQL_PASS = _get_secret("mysql", "password", None)
 MYSQL_DB = _get_secret("mysql", "database", None)
+MYSQL_POOL_SIZE = _get_secret("mysql", "pool_size", 10)
 
 
 # =========================================================
@@ -139,7 +141,14 @@ def ensure_db_connected() -> bool:
         return False
 
     try:
-        st.session_state.db_engine = DatabaseEngine(MYSQL_HOST, MYSQL_USER, MYSQL_PASS, MYSQL_DB)
+        st.session_state.db_engine = DatabaseEngine(
+            MYSQL_HOST,
+            MYSQL_USER,
+            MYSQL_PASS,
+            MYSQL_DB,
+            port=MYSQL_PORT,
+            pool_size=MYSQL_POOL_SIZE,
+        )
         st.session_state.agent = QueryAgent(st.session_state.db_engine)
         st.session_state.db_connected = True
         return True
@@ -381,11 +390,11 @@ with st.expander("❓ Need Help?"):
     
     The **CustomAgent** (in `modules/agent.py`) parses your natural language prompt,
     identifies the intent, and executes the corresponding database query using a
-    temporary connection (no persistent connection is held).
+    shared MySQL connection pool.
     
     Each query:
-    1. Opens a connection when you click send
+    1. Borrows a DB connection from the pool
     2. Executes the SQL
-    3. Closes the connection immediately
+    3. Returns the connection to the pool
     4. Shows results as a table and CSV download
     """)
