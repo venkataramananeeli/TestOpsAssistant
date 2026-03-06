@@ -274,10 +274,11 @@ class QueryAgent:
         if list_only_pattern.match(prompt_lower):
             return "list_suites", params
 
-        # INTENT: Fetch TP release data
-        if "tp7" in prompt_lower or "tp 7" in prompt_lower:
+        # INTENT: Fetch TP release data (explicit release query phrasing only)
+        release_verbs = ["show", "get", "fetch", "view", "display", "list"]
+        if ("tp7" in prompt_lower or "tp 7" in prompt_lower) and any(v in prompt_lower for v in release_verbs):
             return "fetch_tp7_data", params
-        if "mainline" in prompt_lower or "main line" in prompt_lower:
+        if ("mainline" in prompt_lower or "main line" in prompt_lower) and any(v in prompt_lower for v in release_verbs):
             return "fetch_mainline_data", params
 
         # INTENT: Diagnostics
