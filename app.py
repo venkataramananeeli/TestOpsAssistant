@@ -66,20 +66,39 @@ with kpicol3:
 # Secrets/ENV helper
 # =========================================================
 def _get_secret(section: str, key: str, default=None):
-    """Try st.secrets first, then ENV (SECTION_KEY), else default."""
+    """Resolve value from env aliases first, then st.secrets, else default."""
+    env_aliases = {
+        ("mysql", "host"): ["MYSQL_HOST"],
+        ("mysql", "port"): ["MYSQL_PORT"],
+        ("mysql", "user"): ["MYSQL_USER"],
+        ("mysql", "password"): ["MYSQL_PASS", "MYSQL_PASSWORD"],
+        ("mysql", "database"): ["MYSQL_DB", "MYSQL_DATABASE"],
+    }
+
+    for env_key in env_aliases.get((section, key), [f"{section}_{key}".upper()]):
+        val = os.getenv(env_key)
+        if val is None or val == "":
+            continue
+        if key == "port":
+            try:
+                return int(val)
+            except Exception:
+                return default
+        return val
+
     try:
         if section in st.secrets and key in st.secrets[section]:
-            return st.secrets[section][key]
+            val = st.secrets[section][key]
+            if key == "port":
+                try:
+                    return int(val)
+                except Exception:
+                    return default
+            return val
     except Exception:
         pass
-    env_key = f"{section}_{key}".upper()
-    val = os.getenv(env_key, default)
-    if key == "port" and val is not None:
-        try:
-            return int(val)
-        except Exception:
-            return default
-    return val
+
+    return default
 
 
 # =========================================================
@@ -116,7 +135,7 @@ def ensure_db_connected() -> bool:
     # Prompt for credentials if missing
     if not (MYSQL_USER and MYSQL_PASS and MYSQL_DB):
         st.warning("🔐 MySQL credentials not configured.")
-        st.info("Set 'MYSQL_USER', 'MYSQL_PASS', 'MYSQL_DB' in Streamlit secrets or environment variables.")
+        st.info("Set MYSQL_USER, and either MYSQL_PASS or MYSQL_PASSWORD, and either MYSQL_DB or MYSQL_DATABASE.")
         return False
 
     try:
