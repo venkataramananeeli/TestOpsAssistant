@@ -16,9 +16,9 @@ from modules.agent import QueryAgent, AgentResponse
 # =========================================================
 # Page Setup
 # =========================================================
-st.set_page_config(page_title="TestOps Chat Agent", layout="wide")
-st.markdown("<h1>🤖 TestOps Chat Agent</h1>", unsafe_allow_html=True)
-st.caption("Ask questions about your test suites, releases, and dashboards in natural language.")
+st.set_page_config(page_title="Agent", layout="wide")
+st.markdown("<h1>🤖 Agent</h1>", unsafe_allow_html=True)
+st.caption("Ask questions about your test suites and scripts in natural language.")
 
 # Inject minimal CSS for a cleaner, demo-ready look
 st.markdown(
@@ -248,14 +248,11 @@ with st.sidebar:
 # Main Chat Interface
 # =========================================================
 st.subheader("💬 Chat with Your Data")
-st.caption("Ask me anything about suites, releases, or data status.")
+st.caption("Ask me anything about suites, scripts, or data status.")
 
 # Ensure DB is connected before accepting input
 if not ensure_db_connected():
     st.stop()
-
-# Example prompts as quick buttons
-col1, col2, col3 = st.columns([1,1,1])
 
 def _handle_quick_action(prompt: str) -> None:
     """Append user message, run agent immediately, and append agent response."""
@@ -270,25 +267,12 @@ def _handle_quick_action(prompt: str) -> None:
         "data": response.data,
     })
 
-with col1:
-    if st.button("📋 List all suites", key="quick_list", help="Show distinct suite names"):
-        _handle_quick_action("list suites")
-with col2:
-    if st.button("🔍 Show suite details", key="quick_show", help="Show overview and sample suite names"):
-        _handle_quick_action("show suites")
-with col3:
-    if st.button("🚀 Check TP7.0", key="quick_tp7", help="Fetch TP7.0 release data"):
-        _handle_quick_action("show TP7.0 data")
-
-st.divider()
-
 # Quick prompts dropdown (run selected prompt immediately)
 with st.container():
     prompts = [
         "list suites",
         "show suites",
         "tpreggold",
-        "show TP7.0 data",
         "diagnostics",
     ]
     cols = st.columns([3,1])
@@ -299,7 +283,7 @@ with st.container():
             _handle_quick_action(sel)
 
 # Chat input
-user_input = st.chat_input("Ask me about suites, releases, or diagnostics...", key="user_input")
+user_input = st.chat_input("Ask me about suites, scripts, or diagnostics...", key="user_input")
 
 # Process user input
 if user_input:
