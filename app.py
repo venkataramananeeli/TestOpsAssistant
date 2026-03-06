@@ -24,8 +24,10 @@ st.caption("Ask questions about your test suites and scripts in natural language
 st.markdown(
         """
         <style>
-            .stApp { background-color: #f7fafc; }
-            h1 { font-family: 'Segoe UI', Roboto, Helvetica, Arial; font-weight:700; }
+            .stApp { background-color: #f7fafc; font-size: 0.95rem; }
+            h1 { font-family: 'Segoe UI', Roboto, Helvetica, Arial; font-weight:700; font-size: 2.2rem !important; line-height: 1.2; }
+            h2 { font-size: 1.5rem !important; }
+            h3 { font-size: 1.15rem !important; }
             .card { background: white; border-radius: 10px; padding: 12px; box-shadow: 0 2px 8px rgba(16,24,40,0.04); }
             .quick-btn { width:100%; font-weight:600; }
             .stDownloadButton > button { background-color:#0369a1; color: white; }
