@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  testops-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: testops-app
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    restart: unless-stopped
