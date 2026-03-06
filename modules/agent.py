@@ -80,13 +80,21 @@ class QueryAgent:
         })
 
     def _extract_query_filters(self, prompt: str) -> Dict[str, Any]:
-        """Extract suite query filters (suite name, active/inactive, owner)."""
+        """Extract suite/script query filters (suite name, script name, active/inactive, owner)."""
         prompt_lower = prompt.lower().strip()
         params: Dict[str, Any] = {}
 
+        def _split_name_values(raw: str) -> List[str]:
+            normalized = re.sub(r"\s+", " ", raw.strip())
+            return [
+                p.strip(" '\"")
+                for p in re.split(r"\s*,\s*|\s+(?:and|or)\s+", normalized, flags=re.IGNORECASE)
+                if p.strip(" '\"")
+            ]
+
         def _clean_suite_names(items: List[str]) -> List[str]:
             cleaned: List[str] = []
-            blocked = {"name", "names", "suite", "s", "given", "the"}
+            blocked = {"name", "names", "suite", "s", "given", "the", "same", "for"}
             for item in items:
                 candidate = item.strip(" '\"")
                 if not candidate:
@@ -98,40 +106,67 @@ class QueryAgent:
                 cleaned.append(candidate)
             return cleaned
 
+        def _clean_script_names(items: List[str]) -> List[str]:
+            cleaned: List[str] = []
+            blocked = {"name", "names", "script", "scripts", "scirpt", "scirpts", "given", "the", "same", "for"}
+            for item in items:
+                candidate = item.strip(" '\"")
+                if not candidate:
+                    continue
+                if candidate in blocked:
+                    continue
+                if candidate.startswith("given script"):
+                    continue
+                cleaned.append(candidate)
+            return cleaned
+
         # Support explicit "suite name <value>" / "suite names <a,b>" phrases.
         suite_name_match = re.search(
-            r"\bsuite\s*name[s]?\s*(?::|=|is)?\s*([a-z0-9_\-,\s]+?)(?:\s+(?:and|for|with|where|owner|active|inactive|script|scripts|modified|modification|after|before|between|since|on|then)\b|$)",
+            r"\bsuite\s*name[s]?\s*(?::|=|is)?\s*([a-z0-9_\-,\s]+?)(?:\s+and\s+(?:for|with|where|owner|active|inactive|script|scripts|scirpt|scirpts|modified|modification|after|before|between|since|on|then)\b|\s+(?:for|with|where|owner|active|inactive|script|scripts|scirpt|scirpts|modified|modification|after|before|between|since|on|then)\b|$)",
             prompt_lower,
             re.IGNORECASE,
         )
         if suite_name_match:
             suite_str = suite_name_match.group(1).strip(" '\"")
-            suite_names = _clean_suite_names([s.strip() for s in re.split(r"\s*,\s*", suite_str) if s.strip()])
+            suite_names = _clean_suite_names(_split_name_values(suite_str))
             if suite_names:
                 params["suite_names"] = suite_names
 
         suite_match = re.search(
-            r"(?:suite[s]?\s*(?:(?:named?|for|=|:)\s*)?(?:the\s+)?)([a-z0-9_\-,\s]+?)(?:\s+(?:and|for|with|where|owner|active|inactive|script|scripts|modified|modification|after|before|between|since|on|then)\b|$)",
+            r"(?:suite(?:ss|s)?\s*(?:(?:named?|for|=|:)\s*)?(?:the\s+)?)([a-z0-9_\-,\s]+?)(?:\s+and\s+(?:for|with|where|owner|active|inactive|script|scripts|scirpt|scirpts|modified|modification|after|before|between|since|on|then)\b|\s+(?:for|with|where|owner|active|inactive|script|scripts|scirpt|scirpts|modified|modification|after|before|between|since|on|then)\b|$)",
             prompt_lower,
             re.IGNORECASE,
         )
         if "suite_names" not in params and suite_match:
             suite_str = suite_match.group(1).strip(" '\"")
-            suite_names = _clean_suite_names([s.strip() for s in re.split(r"\s*,\s*", suite_str) if s.strip()])
+            suite_names = _clean_suite_names(_split_name_values(suite_str))
             if suite_names:
                 params["suite_names"] = suite_names
         elif "suite_names" not in params:
             # Also support phrases like: "active scripts for the TPREGGOLD"
             generic_for_match = re.search(
-                r"\bfor\s+(?:the\s+)?([a-z0-9_\-,\s]+?)(?:\s+(?:and|with|where|owner|active|inactive|script|scripts|modified|modification|after|before|between|since|on|then)\b|$)",
+                r"\bfor\s+(?:the\s+)?([a-z0-9_\-,\s]+?)(?:\s+and\s+(?:with|where|owner|active|inactive|script|scripts|scirpt|scirpts|modified|modification|after|before|between|since|on|then)\b|\s+(?:with|where|owner|active|inactive|script|scripts|scirpt|scirpts|modified|modification|after|before|between|since|on|then)\b|$)",
                 prompt_lower,
                 re.IGNORECASE,
             )
             if generic_for_match:
                 suite_str = generic_for_match.group(1).strip(" '\"")
-                suite_names = _clean_suite_names([s.strip() for s in re.split(r"\s*,\s*", suite_str) if s.strip()])
+                suite_names = _clean_suite_names(_split_name_values(suite_str))
                 if suite_names:
                     params["suite_names"] = suite_names
+
+        # Support explicit script/script(s) lists:
+        # "scripts scripta, scriptb" / "script name scripta" / "scirpt/scripts ..."
+        script_match = re.search(
+            r"\b(?:scripts|script|scirpts|scirpt)(?:\s*/\s*(?:scripts|script|scirpts|scirpt))?\s*(?:name[s]?)?\s*(?::|=|is|are)?\s*([a-z0-9_\-,\s]+?)(?:\s+and\s+(?:for|with|where|owner|active|inactive|suite|suites|suitess|modified|modification|after|before|between|since|on|then)\b|\s+(?:for|with|where|owner|active|inactive|suite|suites|suitess|modified|modification|after|before|between|since|on|then)\b|$)",
+            prompt_lower,
+            re.IGNORECASE,
+        )
+        if script_match:
+            script_str = script_match.group(1).strip(" '\"")
+            script_names = _clean_script_names(_split_name_values(script_str))
+            if script_names:
+                params["script_names"] = script_names
 
         has_active = bool(re.search(r"\bactive\b", prompt_lower))
         has_inactive = bool(re.search(r"\binactive\b|\bnot\s+active\b", prompt_lower))
@@ -223,6 +258,9 @@ class QueryAgent:
 
         # INTENT: Show ALL suite DETAILS
         if any(kw in prompt_lower for kw in ["show suite", "get suite", "display suite"]):
+            # When user specifies suite/script filters, treat as a filtered data query.
+            if params.get("suite_names") or params.get("script_names"):
+                return "query_suites", params
             # Check if they specified suite names to filter
             suite_match = re.search(
                 r"(?:for|named?|=|:)\s*['\"]?([^'\"]+?)['\"]?(?:\s+and|\s*,|\s*or|$)",
@@ -243,18 +281,19 @@ class QueryAgent:
                 params["suite_names"] = [s.strip() for s in suite_match.group(1).split(",")]
             return "query_suites", params
 
-        if "script" in prompt_lower and "suite" in prompt_lower and any(
+        if ("script" in prompt_lower or "scirpt" in prompt_lower) and "suite" in prompt_lower and any(
             kw in prompt_lower for kw in ["active", "inactive", "owner", "show", "only", "modified", "modification", "date"]
         ):
             return "query_suites", params
         
-        if "script" in prompt_lower and any(kw in prompt_lower for kw in ["show", "list", "get", "find", "search", "active", "inactive", "modified", "modification", "date"]):
+        if ("script" in prompt_lower or "scirpt" in prompt_lower) and any(kw in prompt_lower for kw in ["show", "list", "get", "find", "search", "active", "inactive", "modified", "modification", "date"]):
             return "query_suites", params
 
         # Safety net: if we already extracted meaningful filters and user is asking to view data,
         # route to suite query instead of falling back to unknown.
         has_filters = bool(
             params.get("suite_names")
+            or params.get("script_names")
             or params.get("owners")
             or params.get("active_states")
             or params.get("modified_after")
@@ -416,6 +455,7 @@ We have **{total_suites:,} total suites** in the database.
         """Query suites with optional filters (specific suite names)."""
         try:
             suite_names = params.get("suite_names", [])
+            script_names = params.get("script_names", [])
             active_states = params.get("active_states", [])
             owners = params.get("owners", [])
             modified_after = params.get("modified_after")
@@ -435,6 +475,10 @@ We have **{total_suites:,} total suites** in the database.
                 placeholders = ", ".join(["%s"] * len(suite_names))
                 sql += f" AND suite_name IN ({placeholders})"
                 query_params.extend(suite_names)
+            if script_names:
+                placeholders = ", ".join(["%s"] * len(script_names))
+                sql += f" AND LOWER(CAST(script_name AS CHAR)) IN ({placeholders})"
+                query_params.extend([s.lower().strip() for s in script_names])
             if active_states:
                 active_yes_clause = "LOWER(CAST(active AS CHAR)) IN ('1', 'true', 'yes', 'y')"
                 active_no_clause = "LOWER(CAST(active AS CHAR)) IN ('0', 'false', 'no', 'n')"
@@ -484,6 +528,7 @@ We have **{total_suites:,} total suites** in the database.
                     "count": row_count,
                     "filters": {
                         "suite_names": suite_names or "any",
+                        "script_names": script_names or "any",
                         "active_states": active_states or "any",
                         "owners": owners or "any",
                         "modified_after": modified_after or "any",
