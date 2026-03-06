@@ -16,8 +16,8 @@ from modules.agent import QueryAgent, AgentResponse
 # =========================================================
 # Page Setup
 # =========================================================
-st.set_page_config(page_title="TestOps Agent", layout="wide")
-st.markdown("<h1>🤖 TestOps Agent</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="TestOps Chat Agent", layout="wide")
+st.markdown("<h1>🤖 TestOps Chat Agent</h1>", unsafe_allow_html=True)
 st.caption("Ask questions about your test suites and scripts in natural language.")
 
 # Inject minimal CSS for a cleaner, demo-ready look
@@ -331,7 +331,7 @@ if st.session_state.chat_history:
             with st.chat_message("assistant"):
                 status = "✅" if msg.get("success", False) else "❌"
                 action = msg.get("action", "response").replace("_", " ").title()
-                st.write(f"🤖 **TestOps Agent** [{status}] {action}:\n{content}")
+                st.write(f"🤖 **TestOps Chat Agent** [{status}] {action}:\n{content}")
                 
                 # If there's data, render it inline
                 if msg.get("data"):
