@@ -65,6 +65,15 @@ with kpicol3:
 # =========================================================
 # Secrets/ENV helper
 # =========================================================
+def _has_streamlit_secrets_file() -> bool:
+    """Check common Streamlit secrets.toml locations before touching st.secrets."""
+    candidates = [
+        os.path.join(os.path.expanduser("~"), ".streamlit", "secrets.toml"),
+        os.path.join(os.getcwd(), ".streamlit", "secrets.toml"),
+    ]
+    return any(os.path.exists(path) for path in candidates)
+
+
 def _get_secret(section: str, key: str, default=None):
     """Resolve value from env aliases first, then st.secrets, else default."""
     env_aliases = {
@@ -87,17 +96,19 @@ def _get_secret(section: str, key: str, default=None):
                 return default
         return val
 
-    try:
-        if section in st.secrets and key in st.secrets[section]:
-            val = st.secrets[section][key]
-            if key in {"port", "pool_size"}:
-                try:
-                    return int(val)
-                except Exception:
-                    return default
-            return val
-    except Exception:
-        pass
+    # Avoid noisy "No secrets files found" warnings in Docker when secrets.toml is absent.
+    if _has_streamlit_secrets_file():
+        try:
+            if section in st.secrets and key in st.secrets[section]:
+                val = st.secrets[section][key]
+                if key in {"port", "pool_size"}:
+                    try:
+                        return int(val)
+                    except Exception:
+                        return default
+                return val
+        except Exception:
+            pass
 
     return default
 
